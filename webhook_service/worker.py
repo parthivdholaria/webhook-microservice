@@ -7,7 +7,8 @@ import random
 import uuid
 from datetime import datetime, timezone, timedelta
 from utils.helpers import schedule_retry,mark_delivered,mark_failed
-
+import time
+from utils.signing import compute_signature
 import requests
 
 REQUEST_TIMEOUT_SECONDS = 10
@@ -49,7 +50,7 @@ def deliver(delivery):
     conn = get_connection()
     try:
         sub = conn.execute(
-            "SELECT target_url FROM subscriptions WHERE id = ?",
+            "SELECT target_url, secret FROM subscriptions WHERE id = ?",
             (delivery["subscription_id"],),
         ).fetchone()
         event = conn.execute(
@@ -68,10 +69,20 @@ def deliver(delivery):
         "type": event["type"],
         "payload": json.loads(event["payload"]),
     }
+    
+    raw_body = json.dumps(body).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+
+    if sub["secret"]:
+        timestamp = str(int(time.time()))
+        signature = compute_signature(sub["secret"], timestamp, raw_body)
+        headers["X-Webhook-Timestamp"] = timestamp
+        headers["X-Webhook-Signature"] = signature
 
     try:
         resp = requests.post(
-            sub["target_url"], json=body, timeout=REQUEST_TIMEOUT_SECONDS
+            sub["target_url"], json=raw_body, timeout=REQUEST_TIMEOUT_SECONDS,
+            headers=headers
         )
     except requests.RequestException as exc:
         schedule_retry(delivery, status_code=None, error=str(exc))   # network error/timeout
