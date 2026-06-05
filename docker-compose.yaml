@@ -7,3 +7,27 @@ services:
       - DB_PATH=/app/data/webhooks.db
     volumes:
       - ./data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - benign
+      - tempdown
+      - alwaysdown
+
+  benign:
+    build: .
+    command: uvicorn webhook_service.benign_subscriber:app --host 0.0.0.0 --port 8001
+    ports:
+      - "8001:8001"
+
+  tempdown:
+    build: .
+    command: uvicorn webhook_service.tempdown_subscriber:app --host 0.0.0.0 --port 8002
+    ports:
+      - "8002:8002"
+
+  alwaysdown:
+    build: .
+    command: uvicorn webhook_service.always_down_subscriber:app --host 0.0.0.0 --port 8003
+    ports:
+      - "8003:8003"

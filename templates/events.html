@@ -1,6 +1,51 @@
 {% extends "base.html" %}
-{% block title %}Recent events{% endblock %}
+{% block title %}Recent Events{% endblock %}
 {% block content %}
+
+<div class="card">
+  <h2>Fire New Event</h2>
+
+  <div class="presets">
+    <span>Quick-fill:</span>
+    <button type="button" class="preset-btn benign"
+      onclick="fillEvent('benign', '{&quot;order_id&quot;: &quot;ord_001&quot;, &quot;amount&quot;: 99.99}')">
+      Benign
+    </button>
+    <button type="button" class="preset-btn tempdown"
+      onclick="fillEvent('tempdown', '{&quot;order_id&quot;: &quot;ord_002&quot;}')">
+      Temp Down
+    </button>
+    <button type="button" class="preset-btn alwaysdown"
+      onclick="fillEvent('alwaysdown', '{&quot;order_id&quot;: &quot;ord_003&quot;}')">
+      Always Down
+    </button>
+    <button type="button" class="preset-btn wildcard"
+      onclick="fillEvent('any-event-type', '{&quot;test&quot;: &quot;wildcard&quot;}')">
+      Wildcard test
+    </button>
+  </div>
+
+  <form method="post" action="/dashboard/events/fire">
+    <div class="form-grid">
+      <div>
+        <label for="event_type">Event Type</label>
+        <input type="text" id="event_type" name="event_type"
+               placeholder="benign  /  order.created  /  any-event-type" required>
+      </div>
+      <div>
+        <label for="payload_json">Payload <span class="optional-badge">JSON object</span></label>
+        <input type="text" id="payload_json" name="payload_json"
+               placeholder='{"key": "value"}' required>
+      </div>
+    </div>
+    <div class="form-row">
+      <button type="submit" class="btn btn-primary">Fire Event</button>
+      <button type="button" class="btn btn-outline" onclick="clearEvent()">Clear</button>
+    </div>
+  </form>
+</div>
+
+<h2>Recent Events</h2>
 <table>
   <tr><th>Type</th><th>Received</th><th>Event ID</th></tr>
   {% for event in events %}
@@ -9,6 +54,19 @@
     <td>{{ event.received_at }}</td>
     <td><a href="/dashboard/events/{{ event.id }}">{{ event.id }}</a></td>
   </tr>
+  {% else %}
+  <tr><td colspan="3" style="color:#999;text-align:center">No events yet</td></tr>
   {% endfor %}
 </table>
+
+<script>
+function fillEvent(type, payload) {
+  document.getElementById('event_type').value   = type;
+  document.getElementById('payload_json').value = payload;
+}
+function clearEvent() {
+  ['event_type','payload_json'].forEach(id =>
+    document.getElementById(id).value = '');
+}
+</script>
 {% endblock %}
