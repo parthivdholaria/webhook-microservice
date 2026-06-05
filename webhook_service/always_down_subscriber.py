@@ -2,7 +2,7 @@ from collections import defaultdict
 from fastapi import FastAPI, Request, Response
 from utils.signing import verify_signature
 
-SECRET = "shhh-super-secret"     # the same secret used when registering
+SECRET = "always-down-client-secret"     # the same secret used when registering
 
 app = FastAPI()
 seen = defaultdict(int)
@@ -20,8 +20,5 @@ async def hook(request: Request):
     body = await request.json()
     eid = body["event_id"]
     seen[eid] += 1
-    if seen[eid] < 3:
-        print(f"FAIL (pretending to be down): attempt {seen[eid]} for {eid}")
-        return Response(status_code=500)
-    print(f"OK verified + delivered {eid} on attempt {seen[eid]}")
-    return {"ok": True}
+    print(f"FAIL (Alwyas Down subscriber): attempt {seen[eid]} for {eid}")
+    return Response(status_code=500)

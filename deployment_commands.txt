@@ -1,55 +1,390 @@
-Step 1
-# From project root
-mkdir -p data   # pre-create the volume dir to avoid root-ownership issues
-docker compose up --build
+==============================================================
+  WEBHOOK MICROSERVICE — DEPLOYMENT & TESTING GUIDE
+==============================================================
 
-The API is now live at http://localhost:8000
-
-Step 2. 
-Run the Fake Subscriber (locally, separate terminal)
-
-uvicorn webhook_service.fake_subscriber:app --port 8001
-
-On Mac, Docker containers reach your host machine via host.docker.internal, so the subscriber URL to register will be http://host.docker.internal:8001/hook
-
-Step 3:
-Register a Subscription
-
-curl -s -X POST http://localhost:8000/subscriptions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "target_url": "http://host.docker.internal:8001/hook",
-    "event_filter": "A",
-    "secret": "shhh-super-secret"
-  }' | python3 -m json.tool
+PREREQUISITES
+-------------
+  • Docker Desktop (running)
+  • Python 3.10+ with pip
+  • uvicorn  →  pip install uvicorn fastapi requests
+  • curl
+  • (Optional) python3 -m json.tool  — already in stdlib
 
 
-Step 4:
-Fire an Event (Seprate terminal from Host machine)
+ARCHITECTURE
+------------
+  ┌─────────────────────┐          ┌──────────────────────────────────┐
+  │  Docker Container   │          │  Host Machine (your laptop)      │
+  │  API  :8000         │──POST──▶ │  Subscriber A  :8001  (benign)   │
+  │  Worker thread      │          │  Subscriber B  :8002  (tempdown) │
+  │  SQLite DB          │          │  Subscriber C  :8003  (always↓)  │
+  └─────────────────────┘          └──────────────────────────────────┘
+  Docker reaches host via:  host.docker.internal
 
-curl -s -X POST http://localhost:8000/events \
-  -H "Content-Type: application/json" \
-  -d '{
-    "type": "A",
-    "payload": {"order_id": "ord_001", "amount": 99.99}
-  }' | python3 -m json.tool
+  Subscriber behaviours
+  ─────────────────────
+  benign_subscriber      Always accepts (returns 200). Simulates a healthy client.
+  tempdown_subscriber    Fails the first 2 attempts with 500, then accepts on attempt 3.
+  always_down_subscriber Always returns 500. Triggers full retry exhaustion.
 
-The fake subscriber intentionally returns 500 for the first 2 attempts, 
-then accepts on attempt 3. In the fake subscriber terminal you'll see:
-
-FAIL (pretending to be down): attempt 1 for <event_id>
-FAIL (pretending to be down): attempt 2 for <event_id>
-OK verified + delivered <event_id> on attempt 3
-
-
-Step 6:
-Open in browser: http://localhost:8000/dashboard
-
-Events list → click an event → see delivery attempts, status codes, errors
-http://localhost:8000/dashboard/subscriptions for registered subs
+  Each subscriber verifies the HMAC-SHA256 signature on every incoming request
+  and rejects tampered payloads with 401.
 
 
-Step 7:
-docker compose down   
-# To also wipe the DB:
-rm -rf ./data
+==============================================================
+  STEP 1 — Start everything (one command)
+==============================================================
+
+  # From project root (one-time dir creation avoids root-ownership issues)
+  mkdir -p data
+  docker compose up --build
+
+  This starts FOUR containers simultaneously:
+    webhook    → API + worker   http://localhost:8000
+    benign     → always-up      http://localhost:8001
+    tempdown   → fails 2x then recovers   http://localhost:8002
+    alwaysdown → always 500     http://localhost:8003
+
+  Dashboard:          http://localhost:8000/dashboard
+  Subscriptions page: http://localhost:8000/dashboard/subscriptions
+
+  No separate terminals needed — all subscribers are already running.
+
+
+==============================================================
+  STEP 3 — Register subscriptions
+==============================================================
+
+  Preferred: use the dashboard form at http://localhost:8000/dashboard/subscriptions
+  (click the preset buttons — they auto-fill the correct Docker-internal URLs)
+
+  Or via curl (note: URLs use Docker service names, not host.docker.internal):
+
+  Register benign subscriber (event type "benign"):
+    curl -s -X POST http://localhost:8000/subscriptions \
+      -H "Content-Type: application/json" \
+      -d '{
+        "target_url": "http://benign:8001/hook",
+        "event_filter": "benign",
+        "secret": "benign-client-secret"
+      }' | python3 -m json.tool
+
+  Register tempdown subscriber (event type "tempdown"):
+    curl -s -X POST http://localhost:8000/subscriptions \
+      -H "Content-Type: application/json" \
+      -d '{
+        "target_url": "http://tempdown:8002/hook",
+        "event_filter": "tempdown",
+        "secret": "temp-client-down-secret"
+      }' | python3 -m json.tool
+
+  Register always-down subscriber (event type "alwaysdown"):
+    curl -s -X POST http://localhost:8000/subscriptions \
+      -H "Content-Type: application/json" \
+      -d '{
+        "target_url": "http://alwaysdown:8003/hook",
+        "event_filter": "alwaysdown",
+        "secret": "always-down-client-secret"
+      }' | python3 -m json.tool
+
+
+==============================================================
+  TEST SCENARIOS
+==============================================================
+
+--------------------------------------------------------------
+  SCENARIO 1 — Happy path (immediate delivery)
+--------------------------------------------------------------
+  What it tests: event ingest → subscriber match → first-attempt delivery.
+
+  curl -s -X POST http://localhost:8000/events \
+    -H "Content-Type: application/json" \
+    -d '{"type": "benign", "payload": {"order_id": "ord_001"}}' \
+    | python3 -m json.tool
+
+  Expected in benign container logs (docker compose logs benign):
+    OK verified + delivered <event_id> on attempt 1
+
+  Expected in dashboard:
+    Event status: delivered, attempts: 1, HTTP 200
+
+
+--------------------------------------------------------------
+  SCENARIO 2 — Retry with exponential backoff (temporary failure)
+--------------------------------------------------------------
+  What it tests: 500 responses trigger retries; subscriber recovers on attempt 3.
+  Retry delays follow: 2^n seconds with ±50% jitter, capped at 60s.
+
+  curl -s -X POST http://localhost:8000/events \
+    -H "Content-Type: application/json" \
+    -d '{"type": "tempdown", "payload": {"order_id": "ord_002"}}' \
+    | python3 -m json.tool
+
+  Expected in tempdown container logs (docker compose logs tempdown):
+    FAIL (pretending to be down): attempt 1 for <event_id>
+    FAIL (pretending to be down): attempt 2 for <event_id>
+    OK verified + delivered <event_id> on attempt 3
+
+  Expected in dashboard:
+    Event status: delivered, attempts: 3, last HTTP 200
+    (Wait ~10-20 seconds for all retries to complete)
+
+
+--------------------------------------------------------------
+  SCENARIO 3 — Full retry exhaustion (always-down subscriber)
+--------------------------------------------------------------
+  What it tests: after MAX_ATTEMPTS (5) all fail, delivery moves to "failed".
+
+  curl -s -X POST http://localhost:8000/events \
+    -H "Content-Type: application/json" \
+    -d '{"type": "alwaysdown", "payload": {"order_id": "ord_003"}}' \
+    | python3 -m json.tool
+
+  Expected in alwaysdown container logs (docker compose logs alwaysdown):
+    FAIL (Always Down subscriber): attempt 1 for <event_id>
+    FAIL (Always Down subscriber): attempt 2 for <event_id>
+    FAIL (Always Down subscriber): attempt 3 for <event_id>
+    FAIL (Always Down subscriber): attempt 4 for <event_id>
+    FAIL (Always Down subscriber): attempt 5 for <event_id>
+
+  Expected in dashboard:
+    Delivery status: failed, attempts: 5, last HTTP 500
+    (Takes ~2-5 minutes due to backoff. Watch the dashboard refresh.)
+
+
+--------------------------------------------------------------
+  SCENARIO 4 — Manual retry from dashboard (after exhaustion)
+--------------------------------------------------------------
+  What it tests: operator can force-reset a failed delivery to "pending".
+
+  1. Complete Scenario 3 and wait until delivery shows "failed".
+  2. Open http://localhost:8000/dashboard
+  3. Click the failed event → click the "Retry" button next to the delivery.
+  4. Delivery resets to attempts=0, status=pending.
+  5. Worker picks it up and tries again (still hits always_down → fails again).
+
+  To verify via API (replace <delivery_id> from dashboard URL):
+    curl -s -X POST http://localhost:8000/dashboard/deliveries/<delivery_id>/retry
+
+
+--------------------------------------------------------------
+  SCENARIO 5 — Event type filtering (no cross-delivery)
+--------------------------------------------------------------
+  What it tests: a "benign" event does NOT trigger "tempdown" or "alwaysdown" subs.
+
+  # Fire a "benign" event — only the benign subscriber (port 8001) should receive it
+  curl -s -X POST http://localhost:8000/events \
+    -H "Content-Type: application/json" \
+    -d '{"type": "benign", "payload": {"test": "filtering"}}' \
+    | python3 -m json.tool
+
+  Expected: Terminal 2 prints a delivery; Terminals 3 and 4 are silent.
+  Dashboard: 1 delivery ticket created, delivered to benign sub only.
+
+
+--------------------------------------------------------------
+  SCENARIO 6 — Wildcard subscriber (receives ALL event types)
+--------------------------------------------------------------
+  What it tests: a subscription with event_filter="*" matches every event type.
+
+  # Register a wildcard subscription (reuses benign subscriber on port 8001)
+  curl -s -X POST http://localhost:8000/subscriptions \
+    -H "Content-Type: application/json" \
+    -d '{
+      "target_url": "http://benign:8001/hook",
+      "event_filter": "*",
+      "secret": "benign-client-secret"
+    }' | python3 -m json.tool
+
+  # Fire any event type
+  curl -s -X POST http://localhost:8000/events \
+    -H "Content-Type: application/json" \
+    -d '{"type": "completely-new-type", "payload": {"test": "wildcard"}}' \
+    | python3 -m json.tool
+
+  Expected in Terminal 2: delivery received even though no explicit "completely-new-type" sub exists.
+  Dashboard: tickets_created includes the wildcard subscription.
+
+
+--------------------------------------------------------------
+  SCENARIO 7 — HMAC signature verification (tampered payload rejected)
+--------------------------------------------------------------
+  What it tests: the subscriber verifies the X-Webhook-Signature header and rejects
+  any request with a wrong or missing signature (returns 401, treated as non-retryable).
+
+  # Register a subscription with a WRONG secret (API stores "wrong-secret",
+  # but the subscriber process expects "benign-client-secret")
+  curl -s -X POST http://localhost:8000/subscriptions \
+    -H "Content-Type: application/json" \
+    -d '{
+      "target_url": "http://benign:8001/hook",
+      "event_filter": "sig-test",
+      "secret": "WRONG-SECRET"
+    }' | python3 -m json.tool
+
+  curl -s -X POST http://localhost:8000/events \
+    -H "Content-Type: application/json" \
+    -d '{"type": "sig-test", "payload": {"test": "bad-sig"}}' \
+    | python3 -m json.tool
+
+  Expected in Terminal 2:
+    REJECTED: bad signature
+
+  Expected in dashboard:
+    Delivery status: failed, last HTTP 401
+    (401 is non-retryable — no retry attempts)
+
+
+--------------------------------------------------------------
+  SCENARIO 8 — No matching subscribers (zero tickets)
+--------------------------------------------------------------
+  What it tests: an event with no matching subscribers still ingests cleanly
+  with tickets_created=0.
+
+  curl -s -X POST http://localhost:8000/events \
+    -H "Content-Type: application/json" \
+    -d '{"type": "orphan-event", "payload": {"test": "no-sub"}}' \
+    | python3 -m json.tool
+
+  Expected response:
+    { "status": "accepted", "tickets_created": 0 }
+
+  Dashboard: event appears in list but has no delivery rows.
+
+
+--------------------------------------------------------------
+  SCENARIO 9 — Multiple subscribers for the same event type
+--------------------------------------------------------------
+  What it tests: fanout — one event creates a delivery ticket per matching subscriber.
+
+  # Register a second subscriber also listening on "benign"
+  curl -s -X POST http://localhost:8000/subscriptions \
+    -H "Content-Type: application/json" \
+    -d '{
+      "target_url": "http://tempdown:8002/hook",
+      "event_filter": "benign",
+      "secret": "temp-client-down-secret"
+    }' | python3 -m json.tool
+
+  # Fire a "benign" event — both subscribers should receive it
+  curl -s -X POST http://localhost:8000/events \
+    -H "Content-Type: application/json" \
+    -d '{"type": "benign", "payload": {"test": "fanout"}}' \
+    | python3 -m json.tool
+
+  Expected response:
+    { "tickets_created": 2 }   (or more if wildcard sub from Scenario 6 is still registered)
+
+  Terminal 2: immediate delivery.
+  Terminal 3: fails twice then delivers on attempt 3.
+
+
+--------------------------------------------------------------
+  SCENARIO 10 — Subscription without a secret (no signature headers)
+--------------------------------------------------------------
+  What it tests: secret is optional; when absent the worker skips signing entirely.
+
+  # Start a plain HTTP listener (use the benign subscriber but ignore signature check
+  # by registering WITHOUT a secret)
+  curl -s -X POST http://localhost:8000/subscriptions \
+    -H "Content-Type: application/json" \
+    -d '{
+      "target_url": "http://benign:8001/hook",
+      "event_filter": "nosig"
+    }' | python3 -m json.tool
+
+  curl -s -X POST http://localhost:8000/events \
+    -H "Content-Type: application/json" \
+    -d '{"type": "nosig", "payload": {"test": "no-signature"}}' \
+    | python3 -m json.tool
+
+  Note: The benign subscriber will reject this with 401 because it always
+  verifies a signature. To observe the no-secret path cleanly, point to a
+  plain HTTP echo server (e.g. httpbin or a simple nc listener).
+  The important thing to verify is that the worker sends NO X-Webhook-Signature
+  header when secret is NULL — confirm via the subscriber logs or a proxy.
+
+
+--------------------------------------------------------------
+  SCENARIO 11 — Crash recovery (in-progress tickets re-queued on restart)
+--------------------------------------------------------------
+  What it tests: if the worker crashes mid-delivery, the ticket is not lost —
+  it resets to "pending" on the next boot.
+
+  1. Fire an "alwaysdown" event and let it reach "in_progress" in the DB.
+     (Inspect: sqlite3 data/webhooks.db "SELECT status FROM deliveries LIMIT 5;")
+  2. Kill the Docker container:   docker compose down
+  3. Restart:                     docker compose up
+  4. The lifespan handler calls recover_stuck_deliveries() and resets any
+     "in_progress" rows back to "pending".
+  Dashboard: delivery resumes from where it left off.
+
+
+==============================================================
+  STEP 4 — View the dashboard
+==============================================================
+
+  Events list:         http://localhost:8000/dashboard
+  Subscriptions:       http://localhost:8000/dashboard/subscriptions
+  Event detail:        click any event row → see delivery attempts, status codes, errors
+
+
+==============================================================
+  STEP 5 — Tear down
+==============================================================
+
+  # Stop the API server
+  docker compose down
+
+  # Wipe the database (start fresh next time)
+  rm -rf ./data
+
+
+==============================================================
+  MISSED / EDGE-CASE TEST SCENARIOS (not yet covered above)
+==============================================================
+
+  A. Rapid-fire / concurrent events
+     Fire 10+ events in quick succession and verify the worker processes all of them
+     without dropping any (check tickets_created totals vs delivered count).
+
+       for i in $(seq 1 10); do
+         curl -s -X POST http://localhost:8000/events \
+           -H "Content-Type: application/json" \
+           -d "{\"type\": \"benign\", \"payload\": {\"i\": $i}}" &
+       done; wait
+
+  B. Subscriber URL unreachable (connection refused)
+     Register a subscriber URL that is not running (e.g. port 9999).
+     Expected: worker catches RequestException, schedules retry with error="Connection refused".
+     Delivery eventually fails after MAX_ATTEMPTS with last_error set.
+
+       curl -s -X POST http://localhost:8000/subscriptions \
+         -H "Content-Type: application/json" \
+         -d '{
+           "target_url": "http://host.docker.internal:9999/hook",
+           "event_filter": "dead-url"
+         }' | python3 -m json.tool
+
+       curl -s -X POST http://localhost:8000/events \
+         -H "Content-Type: application/json" \
+         -d '{"type": "dead-url", "payload": {"test": "unreachable"}}' \
+         | python3 -m json.tool
+
+  C. Replay attack protection
+     The subscriber rejects requests with a timestamp older than 300 seconds.
+     To test manually: capture a valid signed request, wait >5 minutes, replay it.
+     Expected: subscriber returns 401 (timestamp too old).
+
+  D. Oversized or malformed payload
+     Send a non-dict payload or very large payload and verify the API returns
+     a 422 validation error without creating a broken event row.
+
+       curl -s -X POST http://localhost:8000/events \
+         -H "Content-Type: application/json" \
+         -d '{"type": "bad", "payload": "this-is-a-string-not-a-dict"}' \
+         | python3 -m json.tool
+
+  E. Duplicate subscription registration
+     Register the same target_url + event_filter twice. Verify that both rows are
+     stored and two delivery tickets are created per event (no dedup at registration).

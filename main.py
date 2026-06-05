@@ -12,7 +12,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from utils.db import init_db, get_connection
 from utils.helpers import recover_stuck_deliveries
-from fastapi import Request, HTTPException
+from fastapi import Request, HTTPException, Form
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import RedirectResponse
@@ -149,6 +149,61 @@ def dashboard_subscriptions(request: Request):
     return templates.TemplateResponse(
         request=request, name="subscriptions.html", context={"subscriptions": subs}
     )
+
+@app.post("/dashboard/subscriptions/create")
+def dashboard_create_subscription(
+    target_url: str = Form(...),
+    event_filter: str = Form(...),
+    secret: str = Form(""),
+):
+    sub_id = str(uuid.uuid4())
+    created_at = datetime.now(timezone.utc).isoformat()
+    conn = get_connection()
+    try:
+        conn.execute(
+            "INSERT INTO subscriptions (id, target_url, secret, event_filter, created_at) VALUES (?, ?, ?, ?, ?)",
+            (sub_id, target_url, secret or None, event_filter, created_at),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return RedirectResponse(url="/dashboard/subscriptions", status_code=303)
+
+
+@app.post("/dashboard/events/fire")
+def dashboard_fire_event(
+    event_type: str = Form(...),
+    payload_json: str = Form(...),
+):
+    try:
+        payload = json.loads(payload_json)
+        if not isinstance(payload, dict):
+            raise ValueError
+    except (json.JSONDecodeError, ValueError):
+        raise HTTPException(status_code=400, detail="Payload must be a valid JSON object {}")
+
+    event_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    conn = get_connection()
+    try:
+        conn.execute(
+            "INSERT INTO events (id, type, payload, received_at) VALUES (?, ?, ?, ?)",
+            (event_id, event_type, json.dumps(payload), now),
+        )
+        subs = conn.execute("SELECT id, event_filter FROM subscriptions").fetchall()
+        for sub in subs:
+            if sub["event_filter"] == event_type or sub["event_filter"] == "*":
+                conn.execute(
+                    """INSERT INTO deliveries
+                        (id, event_id, subscription_id, status, attempts, next_attempt_at, updated_at)
+                       VALUES (?, ?, ?, 'pending', 0, ?, ?)""",
+                    (str(uuid.uuid4()), event_id, sub["id"], now, now),
+                )
+        conn.commit()
+    finally:
+        conn.close()
+    return RedirectResponse(url=f"/dashboard/events/{event_id}", status_code=303)
+
 
 @app.post("/dashboard/deliveries/{delivery_id}/retry")
 def retry_delivery(delivery_id: str):
