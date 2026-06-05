@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Subscriptions{% endblock %}
+{% block content %}
+<table>
+  <tr><th>Target URL</th><th>Filter</th><th>Has secret?</th><th>Created</th></tr>
+  {% for s in subscriptions %}
+  <tr>
+    <td>{{ s.target_url }}</td>
+    <td>{{ s.event_filter }}</td>
+    <td>{{ "yes" if s.secret else "no" }}</td>
+    <td>{{ s.created_at }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% endblock %}
