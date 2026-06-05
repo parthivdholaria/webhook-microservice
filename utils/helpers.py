@@ -1,6 +1,6 @@
 import random
 from datetime import datetime, timezone, timedelta
-from db import get_connection
+from utils.db import get_connection
 
 MAX_ATTEMPTS = 5
 

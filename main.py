@@ -10,9 +10,14 @@ from datetime import datetime, timezone
 from typing import Optional
 from fastapi import FastAPI
 from pydantic import BaseModel
-from utils.matching import filter_matches
 from utils.db import init_db, get_connection
 from utils.helpers import recover_stuck_deliveries
+from fastapi import Request, HTTPException
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
+from fastapi.responses import RedirectResponse
+
+templates = Jinja2Templates(directory="templates")
 
 class EventIn(BaseModel):
     type: str
@@ -31,9 +36,9 @@ async def lifespan(app: FastAPI):
     stop_event = threading.Event()
     worker_thread = threading.Thread(target=run_worker, args=(stop_event,), daemon=True)
     worker_thread.start()
-    yield                          # the app runs (and the worker hums along)
-    stop_event.set()               # on shutdown, ask the worker to stop
-    worker_thread.join(timeout=5)  # give its current pass a moment to finish
+    yield           
+    stop_event.set()              
+    worker_thread.join(timeout=5)  
 
 app = FastAPI(lifespan=lifespan)
 
@@ -54,7 +59,7 @@ def ingest_event(event: EventIn):
         subs = conn.execute("SELECT id, event_filter FROM subscriptions").fetchall()
         tickets = 0
         for sub in subs:
-            if filter_matches(event.type, sub["event_filter"]):
+            if sub["event_filter"] == event.type or sub["event_filter"] == "*":
                 conn.execute(
                     """
                     INSERT INTO deliveries
@@ -89,3 +94,86 @@ def create_subscription(sub: SubscriptionIn):
     conn.close()
 
     return {"status": "created", "subscription_id": sub_id}
+
+
+# FrontEnd APIs
+@app.get("/dashboard", response_class=HTMLResponse)
+def dashboard_events(request: Request):
+    conn = get_connection()
+    try:
+        events = [dict(r) for r in conn.execute(
+            "SELECT id, type, received_at FROM events ORDER BY received_at DESC LIMIT 50"
+        ).fetchall()]
+    finally:
+        conn.close()
+    return templates.TemplateResponse(
+        request=request, name="events.html", context={"events": events}
+    )
+    
+@app.get("/dashboard/events/{event_id}", response_class=HTMLResponse)
+def dashboard_event_detail(request: Request, event_id: str):
+    conn = get_connection()
+    try:
+        event = conn.execute("SELECT * FROM events WHERE id = ?", (event_id,)).fetchone()
+        deliveries = [dict(r) for r in conn.execute(
+            """
+            SELECT d.id, d.status, d.attempts, d.last_status_code, d.last_error,
+                   s.target_url
+            FROM deliveries d
+            JOIN subscriptions s ON s.id = d.subscription_id
+            WHERE d.event_id = ?
+            ORDER BY d.updated_at
+            """,
+            (event_id,),
+        ).fetchall()]
+    finally:
+        conn.close()
+
+    if event is None:
+        raise HTTPException(status_code=404, detail="event not found")
+
+    return templates.TemplateResponse(
+        request=request, name="event_detail.html",
+        context={"event": dict(event), "deliveries": deliveries},
+    )
+    
+@app.get("/dashboard/subscriptions", response_class=HTMLResponse)
+def dashboard_subscriptions(request: Request):
+    conn = get_connection()
+    try:
+        subs = [dict(r) for r in conn.execute(
+            "SELECT * FROM subscriptions ORDER BY created_at DESC"
+        ).fetchall()]
+    finally:
+        conn.close()
+    return templates.TemplateResponse(
+        request=request, name="subscriptions.html", context={"subscriptions": subs}
+    )
+
+@app.post("/dashboard/deliveries/{delivery_id}/retry")
+def retry_delivery(delivery_id: str):
+    now = datetime.now(timezone.utc).isoformat()
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT event_id, status FROM deliveries WHERE id = ?",
+            (delivery_id,),
+        ).fetchone()
+
+        if row is None:
+            raise HTTPException(status_code=404, detail="delivery not found")
+
+        # only a failed ticket can be hand-retried
+        if row["status"] == "failed":
+            conn.execute(
+                "UPDATE deliveries SET status='pending', attempts=0, "
+                "next_attempt_at=?, last_error=NULL, updated_at=? WHERE id=?",
+                (now, now, delivery_id),
+            )
+            conn.commit()
+
+        event_id = row["event_id"]
+    finally:
+        conn.close()
+
+    return RedirectResponse(url=f"/dashboard/events/{event_id}", status_code=303)

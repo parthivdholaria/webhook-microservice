@@ -1,7 +1,10 @@
 import sqlite3
 from pathlib import Path
 
-DB_PATH = Path(__file__).parent / "webhooks.db"
+import os
+DB_PATH = Path(os.environ.get("DB_PATH", "webhooks.db"))
+
+# DB_PATH = Path(__file__).parent / "webhooks.db"   # use this when testing using uvicorn app
 
 def get_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)

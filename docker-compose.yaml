@@ -1,0 +1,9 @@
+services:
+  webhook:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - DB_PATH=/app/data/webhooks.db
+    volumes:
+      - ./data:/app/data

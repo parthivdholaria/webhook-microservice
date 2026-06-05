@@ -33,6 +33,8 @@ def claim_one_delivery():
         if row is None:
             return None
 
+        # We set the status to in_progress and not completed directly to avoid multiple
+        # threads from working on the same ticket. 
         cur = conn.execute(
             "UPDATE deliveries SET status = 'in_progress', updated_at = ? "
             "WHERE id = ? AND status = 'pending'",
@@ -81,7 +83,7 @@ def deliver(delivery):
 
     try:
         resp = requests.post(
-            sub["target_url"], json=raw_body, timeout=REQUEST_TIMEOUT_SECONDS,
+            sub["target_url"], data=raw_body, timeout=REQUEST_TIMEOUT_SECONDS,
             headers=headers
         )
     except requests.RequestException as exc:

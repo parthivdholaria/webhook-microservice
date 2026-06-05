@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Recent events{% endblock %}
+{% block content %}
+<table>
+  <tr><th>Type</th><th>Received</th><th>Event ID</th></tr>
+  {% for event in events %}
+  <tr>
+    <td>{{ event.type }}</td>
+    <td>{{ event.received_at }}</td>
+    <td><a href="/dashboard/events/{{ event.id }}">{{ event.id }}</a></td>
+  </tr>
+  {% endfor %}
+</table>
+{% endblock %}

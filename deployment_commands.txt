@@ -1,0 +1,55 @@
+Step 1
+# From project root
+mkdir -p data   # pre-create the volume dir to avoid root-ownership issues
+docker compose up --build
+
+The API is now live at http://localhost:8000
+
+Step 2. 
+Run the Fake Subscriber (locally, separate terminal)
+
+uvicorn webhook_service.fake_subscriber:app --port 8001
+
+On Mac, Docker containers reach your host machine via host.docker.internal, so the subscriber URL to register will be http://host.docker.internal:8001/hook
+
+Step 3:
+Register a Subscription
+
+curl -s -X POST http://localhost:8000/subscriptions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "target_url": "http://host.docker.internal:8001/hook",
+    "event_filter": "A",
+    "secret": "shhh-super-secret"
+  }' | python3 -m json.tool
+
+
+Step 4:
+Fire an Event (Seprate terminal from Host machine)
+
+curl -s -X POST http://localhost:8000/events \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "A",
+    "payload": {"order_id": "ord_001", "amount": 99.99}
+  }' | python3 -m json.tool
+
+The fake subscriber intentionally returns 500 for the first 2 attempts, 
+then accepts on attempt 3. In the fake subscriber terminal you'll see:
+
+FAIL (pretending to be down): attempt 1 for <event_id>
+FAIL (pretending to be down): attempt 2 for <event_id>
+OK verified + delivered <event_id> on attempt 3
+
+
+Step 6:
+Open in browser: http://localhost:8000/dashboard
+
+Events list → click an event → see delivery attempts, status codes, errors
+http://localhost:8000/dashboard/subscriptions for registered subs
+
+
+Step 7:
+docker compose down   
+# To also wipe the DB:
+rm -rf ./data
