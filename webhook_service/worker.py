@@ -99,10 +99,9 @@ def deliver(delivery):
         mark_failed(delivery, resp.status_code, "non-retryable status")
         
 def run_worker(stop_event: threading.Event):
-    """The kitchen loop: claim a ticket, deliver it, repeat. Naps when idle."""
     while not stop_event.is_set():
         delivery = claim_one_delivery()
         if delivery is None:
-            time.sleep(POLL_INTERVAL_SECONDS)   # board empty — take a short nap
+            time.sleep(POLL_INTERVAL_SECONDS)
             continue
         deliver(delivery)
