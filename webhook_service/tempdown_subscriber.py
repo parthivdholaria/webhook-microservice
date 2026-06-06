@@ -10,7 +10,7 @@ seen = defaultdict(int)
 
 @app.post("/hook")
 async def hook(request: Request):
-    raw = await request.body()                            # the EXACT bytes that were signed
+    raw = await request.body()                           
     timestamp = request.headers.get("X-Webhook-Timestamp", "")
     signature = request.headers.get("X-Webhook-Signature", "")
 
