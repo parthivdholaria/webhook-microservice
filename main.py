@@ -42,6 +42,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+@app.get("/")
+def root():
+    return RedirectResponse(url="/dashboard")
+
 @app.post("/events")
 def ingest_event(event: EventIn):
     event_id = str(uuid.uuid4())

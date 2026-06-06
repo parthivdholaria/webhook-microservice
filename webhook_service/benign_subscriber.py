@@ -1,8 +1,9 @@
 from collections import defaultdict
 from fastapi import FastAPI, Request, Response
 from utils.signing import verify_signature
+from utils.constants import config
 
-SECRET = "benign-client-secret"     # the same secret used when registering
+SECRET = config["SECRETS"]["BENIGN"]    # the same secret used when registering
 
 app = FastAPI()
 seen = defaultdict(int)
