@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Event: {{ event.type }}{% endblock %}
+{% block content %}
+<p><strong>ID:</strong> {{ event.id }}</p>
+<p><strong>Received:</strong> {{ event.received_at }}</p>
+<p><strong>Payload:</strong> {{ event.payload }}</p>
+
+<h2>Deliveries</h2>
+<table>
+  <tr><th>Subscriber</th><th>Status</th><th>Attempts</th><th>Last code</th><th>Last error</th><th>Action</th></tr>
+  {% for d in deliveries %}
+  <tr>
+    <td>{{ d.target_url }}</td>
+    <td class="status-{{ d.status }}">{{ d.status }}</td>
+    <td>{{ d.attempts }}</td>
+    <td>{{ d.last_status_code }}</td>
+    <td>{{ d.last_error }}</td>
+    <td>
+      {% if d.status == "failed" %}
+      <form method="post" action="/dashboard/deliveries/{{ d.id }}/retry" style="margin:0">
+        <button type="submit">Retry</button>
+      </form>
+      {% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% endblock %}

@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Subscriptions{% endblock %}
+{% block content %}
+
+<div class="card">
+  <h2>Register New Subscription</h2>
+
+  <div class="presets">
+    <span>Quick-fill:</span>
+    <button type="button" class="preset-btn benign"
+      onclick="fillSub('http://benign:8001/hook','benign','benign-client-secret')">
+      Benign (always up)
+    </button>
+    <button type="button" class="preset-btn tempdown"
+      onclick="fillSub('http://tempdown:8002/hook','tempdown','temp-client-down-secret')">
+      Temp Down (retry)
+    </button>
+    <button type="button" class="preset-btn alwaysdown"
+      onclick="fillSub('http://alwaysdown:8003/hook','alwaysdown','always-down-client-secret')">
+      Always Down (exhaustion)
+    </button>
+    <button type="button" class="preset-btn wildcard"
+      onclick="fillSub('http://benign:8001/hook','*','benign-client-secret')">
+      Wildcard *
+    </button>
+  </div>
+
+  <form method="post" action="/dashboard/subscriptions/create">
+    <div class="form-grid">
+      <div>
+        <label for="target_url">Target URL</label>
+        <input type="text" id="target_url" name="target_url"
+               placeholder="http://host.docker.internal:8001/hook" required>
+      </div>
+      <div>
+        <label for="event_filter">Event Filter</label>
+        <input type="text" id="event_filter" name="event_filter"
+               placeholder="benign  /  *  /  order.created" required>
+      </div>
+      <div>
+        <label for="secret">
+          Secret <span class="optional-badge">optional</span>
+        </label>
+        <input type="text" id="secret" name="secret"
+               placeholder="shared HMAC secret (leave blank for no signing)">
+      </div>
+    </div>
+    <div class="form-row">
+      <button type="submit" class="btn btn-primary">Register Subscription</button>
+      <button type="button" class="btn btn-outline" onclick="clearSub()">Clear</button>
+    </div>
+  </form>
+</div>
+
+<h2>Registered Subscriptions</h2>
+<table>
+  <tr><th>Target URL</th><th>Filter</th><th>Has secret?</th><th>Created</th></tr>
+  {% for s in subscriptions %}
+  <tr>
+    <td>{{ s.target_url }}</td>
+    <td>{{ s.event_filter }}</td>
+    <td>{{ "yes" if s.secret else "no" }}</td>
+    <td>{{ s.created_at }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="4" style="color:#999;text-align:center">No subscriptions yet</td></tr>
+  {% endfor %}
+</table>
+
+<script>
+function fillSub(url, filter, secret) {
+  document.getElementById('target_url').value   = url;
+  document.getElementById('event_filter').value = filter;
+  document.getElementById('secret').value       = secret;
+}
+function clearSub() {
+  ['target_url','event_filter','secret'].forEach(id =>
+    document.getElementById(id).value = '');
+}
+</script>
+{% endblock %}
