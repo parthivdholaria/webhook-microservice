@@ -10,9 +10,10 @@ from utils.helpers import schedule_retry,mark_delivered,mark_failed
 import time
 from utils.signing import compute_signature
 import requests
+from utils.constants import config
 
-REQUEST_TIMEOUT_SECONDS = 10
-POLL_INTERVAL_SECONDS = 2
+REQUEST_TIMEOUT_SECONDS = config["REQUEST_TIMEOUT_SECONDS"]
+POLL_INTERVAL_SECONDS = config["POLL_INTERVAL_SECONDS"]
 
 
 def claim_one_delivery():

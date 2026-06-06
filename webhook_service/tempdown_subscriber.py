@@ -1,8 +1,9 @@
 from collections import defaultdict
 from fastapi import FastAPI, Request, Response
 from utils.signing import verify_signature
+from utils.constants import config
 
-SECRET = "temp-client-down-secret"     
+SECRET = config["SECRETS"]["TEMPDOWN"]
 
 app = FastAPI()
 seen = defaultdict(int)

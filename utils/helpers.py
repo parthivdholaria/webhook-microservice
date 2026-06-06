@@ -1,8 +1,9 @@
 import random
 from datetime import datetime, timezone, timedelta
 from utils.db import get_connection
+from utils.constants import config
 
-MAX_ATTEMPTS = 5
+MAX_ATTEMPTS = config["MAX_ATTEMPTS"]
 
 def mark_delivered(delivery, status_code):
     now = datetime.now(timezone.utc).isoformat()
